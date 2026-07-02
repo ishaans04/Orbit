@@ -1,0 +1,34 @@
+[
+  {
+    "id": "t1",
+    "title": "Finish PRD implementation notes",
+    "due_date": "2026-07-02T17:00:00",
+    "status": "pending",
+    "estimated_effort_minutes": 45,
+    "source": "manual"
+  },
+  {
+    "id": "t2",
+    "title": "Prepare questions for advisor check-in",
+    "due_date": "2026-07-02T11:00:00",
+    "status": "pending",
+    "estimated_effort_minutes": 20,
+    "source": "manual"
+  },
+  {
+    "id": "t3",
+    "title": "File July expense receipts",
+    "due_date": null,
+    "status": "pending",
+    "estimated_effort_minutes": 30,
+    "source": "manual"
+  },
+  {
+    "id": "t4",
+    "title": "Archive old sprint notes",
+    "due_date": null,
+    "status": "done",
+    "estimated_effort_minutes": 15,
+    "source": "manual"
+  }
+]

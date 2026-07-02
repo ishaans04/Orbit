@@ -1,0 +1,42 @@
+[
+  {
+    "id": "e1",
+    "sender": "manager@company.com",
+    "subject": "Q3 report review needed today",
+    "body": "Can you review the Q3 report draft and send comments before the 3 PM leadership sync?",
+    "received_at": "2026-07-02T07:35:00",
+    "labels": ["important"],
+    "read": false,
+    "deadline": "2026-07-02T15:00:00"
+  },
+  {
+    "id": "e2",
+    "sender": "newsletter@productivityweekly.com",
+    "subject": "Five focus tips for busy mornings",
+    "body": "This week's newsletter covers calendar batching and inbox triage.",
+    "received_at": "2026-07-02T06:15:00",
+    "labels": ["newsletter"],
+    "read": false,
+    "deadline": null
+  },
+  {
+    "id": "e3",
+    "sender": "professor@university.edu",
+    "subject": "Recommendation letter details",
+    "body": "Please confirm the internship recommendation details by tomorrow so I can submit on time.",
+    "received_at": "2026-07-01T21:10:00",
+    "labels": ["important"],
+    "read": false,
+    "deadline": "2026-07-03T12:00:00"
+  },
+  {
+    "id": "e4",
+    "sender": "client@northstar.ai",
+    "subject": "Contract signature follow-up",
+    "body": "Could you reply with confirmation once the contract signature packet is reviewed?",
+    "received_at": "2026-07-02T08:05:00",
+    "labels": [],
+    "read": true,
+    "deadline": null
+  }
+]
