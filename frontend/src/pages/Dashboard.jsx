@@ -48,7 +48,8 @@ const INSIGHTS = [
   { label: "Priorities", icon: TrendingUp },
   { label: "Conflicts", icon: AlertTriangle },
   { label: "Analytics", icon: BarChart3 },
-  { label: "Feedback", icon: MessageSquare }
+  { label: "Feedback", icon: MessageSquare },
+  { label: "History", icon: Clock3 }
 ];
 
 const QUICK_COMMANDS = [
@@ -283,8 +284,12 @@ export default function Dashboard() {
   const [runStartedAt, setRunStartedAt] = useState(null);
   const [mockData, setMockData] = useState({ emails: [], calendar: [], tasks: [] });
   const [feedbackRecords, setFeedbackRecords] = useState([]);
+  const [briefingRuns, setBriefingRuns] = useState([]);
+  const [selectedRun, setSelectedRun] = useState(null);
   const [dataError, setDataError] = useState("");
+  const [historyError, setHistoryError] = useState("");
   const [isDataLoading, setIsDataLoading] = useState(true);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [feedbackState, setFeedbackState] = useState({});
   const [telemetry, setTelemetry] = useState(null);
   const [isTelemetryOpen, setIsTelemetryOpen] = useState(false);
@@ -302,16 +307,18 @@ export default function Dashboard() {
       setIsDataLoading(true);
       setDataError("");
       try {
-        const [emails, calendar, tasks, feedback] = await Promise.all([
+        const [emails, calendar, tasks, feedback, runs] = await Promise.all([
           fetchJson("/api/data/mock/emails"),
           fetchJson("/api/data/mock/calendar"),
           fetchJson("/api/data/mock/tasks"),
-          fetchJson("/api/feedback")
+          fetchJson("/api/feedback"),
+          fetchJson("/api/briefing/runs")
         ]);
 
         if (!ignore) {
           setMockData({ emails, calendar, tasks });
           setFeedbackRecords(feedback);
+          setBriefingRuns(runs);
         }
       } catch (caught) {
         if (!ignore) {
@@ -399,6 +406,37 @@ export default function Dashboard() {
     window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
   }
 
+  async function loadHistory(runId = selectedRun?.id) {
+    setIsHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const runs = await fetchJson("/api/briefing/runs");
+      setBriefingRuns(runs);
+      const nextRunId = runId ?? runs[0]?.id;
+      if (nextRunId) {
+        const detail = await fetchJson(`/api/briefing/runs/${nextRunId}`);
+        setSelectedRun(detail);
+      }
+    } catch (caught) {
+      setHistoryError(caught.message ?? "Unable to load briefing history.");
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }
+
+  async function openRunDetail(runId) {
+    setIsHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const detail = await fetchJson(`/api/briefing/runs/${runId}`);
+      setSelectedRun(detail);
+    } catch (caught) {
+      setHistoryError(caught.message ?? "Unable to load briefing run.");
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }
+
   async function generateBriefing(prompt = request) {
     setActiveView("Dashboard");
     setIsGenerating(true);
@@ -461,6 +499,9 @@ export default function Dashboard() {
     }
     if (event === "final") {
       setResult(payload);
+      if (payload.run_id) {
+        loadHistory(payload.run_id);
+      }
     }
     if (event === "error") {
       setError(payload.message);
@@ -788,6 +829,46 @@ export default function Dashboard() {
       );
     }
 
+    if (activeView === "History") {
+      return (
+        <DataView title="History" subtitle="Persistent briefing runs saved by the backend database.">
+          {historyError && <div className="orbit-os-error">{historyError}</div>}
+          {isHistoryLoading && (
+            <div className="orbit-empty-inline">
+              <Loader2 size={16} className="spin" />
+              <span>Loading briefing history...</span>
+            </div>
+          )}
+          {briefingRuns.length ? (
+            <div className="orbit-history-layout">
+              <div className="orbit-data-list">
+                {briefingRuns.map((run) => (
+                  <button
+                    type="button"
+                    className={`orbit-data-row orbit-history-run ${
+                      selectedRun?.id === run.id ? "is-selected" : ""
+                    }`}
+                    onClick={() => openRunDetail(run.id)}
+                    key={run.id}
+                  >
+                    <Clock3 size={18} />
+                    <div>
+                      <strong>{run.prompt}</strong>
+                      <p>{formatDateTime(run.created_at)} - {run.status}</p>
+                      <span>{run.event_count} event(s) {run.has_output ? "- briefing saved" : ""}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <RunDetail run={selectedRun} />
+            </div>
+          ) : (
+            <EmptyView message="Run a briefing to create your first saved history item." />
+          )}
+        </DataView>
+      );
+    }
+
     return (
       <DataView title="Feedback" subtitle="Recent up/down signals saved through the current feedback endpoint.">
         {feedbackRecords.length ? [...feedbackRecords].reverse().slice(0, 12).map((record, index) => (
@@ -829,6 +910,92 @@ export default function Dashboard() {
       <div className="orbit-empty-inline">
         <Sparkles size={18} />
         <span>{message}</span>
+      </div>
+    );
+  }
+
+  function RunDetail({ run }) {
+    if (!run) {
+      return (
+        <div className="orbit-run-detail">
+          <EmptyView message="Select a briefing run to inspect its saved output." />
+        </div>
+      );
+    }
+
+    const output = run.output;
+    const savedBriefing = output?.briefing;
+
+    return (
+      <div className="orbit-run-detail">
+        <div className="orbit-run-detail-header">
+          <span className="orbit-os-section-heading">Run Detail</span>
+          <strong>{run.status}</strong>
+          <p>{formatDateTime(run.created_at)}</p>
+        </div>
+
+        {!savedBriefing ? (
+          <EmptyView message={run.error_message || "This run has no saved briefing output yet."} />
+        ) : (
+          <div className="orbit-run-sections">
+            <div className="orbit-brief-summary">
+              <Sparkles size={18} />
+              <p>{savedBriefing.summary}</p>
+            </div>
+
+            <BriefSection title="Top Priorities">
+              {(savedBriefing.top_priorities ?? []).length ? (
+                savedBriefing.top_priorities.map((item) => (
+                  <BriefingItem key={item.item_id} icon={Star} meta={item.type}>
+                    {item.headline}
+                  </BriefingItem>
+                ))
+              ) : (
+                <p className="orbit-brief-muted">No priorities saved for this run.</p>
+              )}
+            </BriefSection>
+
+            <BriefSection title="Important Emails">
+              {(savedBriefing.full_sections?.emails ?? []).length ? (
+                savedBriefing.full_sections.emails.map((email) => (
+                  <BriefingItem key={email.id} icon={Mail} meta={email.sender}>
+                    {email.subject}
+                  </BriefingItem>
+                ))
+              ) : (
+                <p className="orbit-brief-muted">No important emails saved for this run.</p>
+              )}
+            </BriefSection>
+
+            <BriefSection title="Due Tasks">
+              {(savedBriefing.full_sections?.tasks ?? []).length ? (
+                savedBriefing.full_sections.tasks.map((task) => (
+                  <BriefingItem
+                    key={task.id}
+                    icon={CheckSquare}
+                    meta={task.due_date ? `Due ${formatValueTime(task.due_date)}` : task.source}
+                  >
+                    {task.title}
+                  </BriefingItem>
+                ))
+              ) : (
+                <p className="orbit-brief-muted">No due tasks saved for this run.</p>
+              )}
+            </BriefSection>
+
+            <BriefSection title="Suggested Schedule">
+              {(savedBriefing.suggested_schedule ?? []).length ? (
+                savedBriefing.suggested_schedule.map((block, index) => (
+                  <BriefingItem key={`${block.time_block}-${index}`} icon={Clock3} meta={block.time_block}>
+                    {block.activity}
+                  </BriefingItem>
+                ))
+              ) : (
+                <p className="orbit-brief-muted">No schedule saved for this run.</p>
+              )}
+            </BriefSection>
+          </div>
+        )}
       </div>
     );
   }

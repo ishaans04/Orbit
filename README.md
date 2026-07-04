@@ -1,6 +1,6 @@
 # AI Daily Briefing Assistant
 
-Phase 1 scaffold for a multi-agent daily briefing assistant. It uses FastAPI, typed Pydantic agent contracts, mock JSON fixtures, SSE status streaming, a React/Vite dashboard, and feedback-aware priority ranking.
+Phase 1 scaffold for a multi-agent daily briefing assistant. It uses FastAPI, typed Pydantic agent contracts, mock JSON fixtures, SQLite-backed persistence, SSE status streaming, a React/Vite dashboard, and feedback-aware priority ranking.
 
 ## What Is Built
 
@@ -8,8 +8,9 @@ Phase 1 scaffold for a multi-agent daily briefing assistant. It uses FastAPI, ty
 - Email, Calendar, Task, Priority, and Final Briefing agents using structured schemas.
 - Mock data fixtures for email, calendar, tasks, and feedback.
 - `POST /api/briefing/generate` streaming agent status events and final briefing JSON.
-- `POST /api/feedback` storing thumbs up/down style feedback in `backend/data/mock/feedback.json`.
-- React dashboard for request entry, live agent status, briefing sections, top priorities, and feedback controls.
+- `GET /api/briefing/runs` and `GET /api/briefing/runs/{run_id}` for persisted run history.
+- `POST /api/feedback` storing thumbs up/down style feedback in the local database.
+- React dashboard for request entry, live agent status, briefing sections, top priorities, feedback controls, and briefing history.
 
 ## Run Locally
 
@@ -48,10 +49,13 @@ backend/
     agents/          # Planner, specialized agents, priority, final briefing
     llm/             # Provider interface placeholder for OpenAI/Gemini adapters
     services/        # Fixture and feedback stores
+    db.py            # SQLModel engine/session setup
     main.py          # FastAPI app
+    models.py        # SQLModel persistence models
     orchestrator.py  # Sequential typed agent orchestration + SSE
     schemas.py       # Pydantic contracts
   data/mock/         # Phase 1 JSON fixtures
+  migrations/        # Alembic migrations
 frontend/
   src/               # React dashboard
 ```
@@ -59,5 +63,5 @@ frontend/
 ## Next Build Steps
 
 - Add a real `OpenAIProvider` or `GeminiProvider` behind `LLMProvider`.
-- Persist feedback and briefing history in SQLite for Phase 2.
 - Add Google OAuth, Gmail, and Calendar integrations behind the same raw-data schemas.
+- Add PostgreSQL deployment config for production.

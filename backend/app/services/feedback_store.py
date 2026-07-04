@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import TypeAdapter
+from sqlmodel import select
 
+from app.db import session_scope
+from app.models import FeedbackRecordDB
 from app.schemas import FeedbackCreate, FeedbackRecord
 from app.services.fixture_store import MOCK_DIR, load_emails, load_tasks
 
@@ -21,9 +24,14 @@ def _ensure_feedback_file() -> None:
 
 
 def load_feedback() -> list[FeedbackRecord]:
-    _ensure_feedback_file()
-    data = json.loads(FEEDBACK_PATH.read_text(encoding="utf-8"))
-    return TypeAdapter(list[FeedbackRecord]).validate_python(data)
+    with session_scope() as session:
+        records = session.exec(
+            select(FeedbackRecordDB).order_by(FeedbackRecordDB.timestamp)
+        ).all()
+        if records:
+            return [_to_schema(record) for record in records]
+
+    return _load_legacy_feedback()
 
 
 def infer_item_features(item_id: str, item_type: str) -> dict[str, Any]:
@@ -49,23 +57,21 @@ def infer_item_features(item_id: str, item_type: str) -> dict[str, Any]:
 
 
 def record_feedback(feedback: FeedbackCreate) -> FeedbackRecord:
-    records = load_feedback()
     features = feedback.item_features or infer_item_features(
         feedback.item_id, feedback.item_type
     )
-    record = FeedbackRecord(
+    db_record = FeedbackRecordDB(
         item_id=feedback.item_id,
         item_type=feedback.item_type,
         action=feedback.action,
         item_features=features,
         timestamp=datetime.now(timezone.utc),
     )
-    records.append(record)
-    FEEDBACK_PATH.write_text(
-        json.dumps([item.model_dump(mode="json") for item in records], indent=2),
-        encoding="utf-8",
-    )
-    return record
+    with session_scope() as session:
+        session.add(db_record)
+        session.commit()
+        session.refresh(db_record)
+        return _to_schema(db_record)
 
 
 def summarize_feedback(records: list[FeedbackRecord]) -> list[str]:
@@ -109,3 +115,19 @@ def _keyword_tags(text: str) -> list[str]:
         if keyword in lowered:
             tags.append(keyword)
     return tags
+
+
+def _load_legacy_feedback() -> list[FeedbackRecord]:
+    _ensure_feedback_file()
+    data = json.loads(FEEDBACK_PATH.read_text(encoding="utf-8"))
+    return TypeAdapter(list[FeedbackRecord]).validate_python(data)
+
+
+def _to_schema(record: FeedbackRecordDB) -> FeedbackRecord:
+    return FeedbackRecord(
+        item_id=record.item_id,
+        item_type=record.item_type,
+        action=record.action,
+        item_features=record.item_features,
+        timestamp=record.timestamp,
+    )
