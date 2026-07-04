@@ -1,85 +1,412 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
-  Send,
-  Loader2,
-  Mail,
+  Activity,
+  AlertTriangle,
+  BarChart3,
+  Brain,
   CalendarDays,
+  CheckCircle2,
   CheckSquare,
   Clock3,
-  Settings,
-  Sun,
+  Database,
   FileText,
-  AlertTriangle,
+  LayoutDashboard,
+  Loader2,
+  Mail,
+  MessageSquare,
+  Send,
+  Sparkles,
+  Star,
+  ThumbsDown,
+  ThumbsUp,
+  TrendingUp,
   User,
-  ArrowRight,
-  Inbox,
-  CheckCircle2,
-  MessageSquareText,
-  Zap
+  X
 } from "lucide-react";
-import Sidebar from "../components/Sidebar";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
-const AGENT_LABELS = {
-  planner: "Planner Agent",
-  email: "Email Agent",
-  calendar: "Calendar Agent",
-  task: "Task Agent",
-  priority: "Priority Agent",
-  final_briefing: "Final Briefing"
-};
-
-const AGENT_ORDER = [
-  "planner",
-  "email",
-  "calendar",
-  "task",
-  "priority",
-  "final_briefing"
+const AGENTS = [
+  { key: "planner", label: "Planner", icon: Brain },
+  { key: "email", label: "Email Agent", icon: Mail },
+  { key: "calendar", label: "Calendar Agent", icon: CalendarDays },
+  { key: "task", label: "Task Agent", icon: CheckSquare },
+  { key: "priority", label: "Priority Agent", icon: Star },
+  { key: "final_briefing", label: "Briefing Agent", icon: FileText }
 ];
 
-function scoreBand(score) {
-  if (!score) return "medium";
-  if (score >= 7) return "high";
-  if (score >= 4) return "medium";
-  return "low";
+const DATA_SOURCES = [
+  { label: "Emails", icon: Mail },
+  { label: "Calendar", icon: CalendarDays },
+  { label: "Tasks", icon: CheckSquare }
+];
+
+const DASHBOARD_NAV = [{ label: "Dashboard", icon: LayoutDashboard }];
+
+const INSIGHTS = [
+  { label: "Priorities", icon: TrendingUp },
+  { label: "Conflicts", icon: AlertTriangle },
+  { label: "Analytics", icon: BarChart3 },
+  { label: "Feedback", icon: MessageSquare }
+];
+
+const QUICK_COMMANDS = [
+  { label: "Morning Brief", prompt: "Morning Brief", icon: Sparkles },
+  { label: "Conflicts", prompt: "Conflicts", icon: AlertTriangle },
+  { label: "Inbox", prompt: "Inbox", icon: Mail },
+  { label: "Due Tasks", prompt: "Due Tasks", icon: CheckSquare },
+  { label: "Free Time", prompt: "Free Time", icon: Clock3 }
+];
+
+const cardMotion = {
+  initial: { opacity: 0, y: 18 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] }
+};
+
+function formatClock(date = new Date()) {
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 
-function TypeIcon({ type }) {
-  if (type === "email") return <Inbox size={15} />;
-  if (type === "meeting") return <CalendarDays size={15} />;
-  if (type === "task") return <CheckSquare size={15} />;
-  return <MessageSquareText size={15} />;
+function formatTopBarDate(date) {
+  const day = date.toLocaleDateString([], { weekday: "long" });
+  return `Today is ${day} \u2022 ${formatClock(date)}`;
 }
 
-function inferItemType(item) {
-  if (item.type) return item.type;
-  if (item.sender || item.subject) return "email";
-  if (item.start) return "meeting";
-  if (item.due_date || item.estimated_effort_minutes) return "task";
-  return undefined;
+function formatValueTime(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatDateTime(value) {
+  if (!value) return "No date";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function eventLabel(event) {
+  if (event.message) return event.message;
+  if (event.status === "running") return "Processing live data";
+  if (event.status === "done") return "Completed";
+  return "Waiting to start";
+}
+
+function normalizeAgentKey(key) {
+  return key === "final" ? "final_briefing" : key;
+}
+
+function getSectionOutput(statuses, key) {
+  return [...statuses].reverse().find(
+    (event) => normalizeAgentKey(event.agent) === key && event.output
+  )?.output;
+}
+
+function getAgentStatus(agentKey, statuses, result, isGenerating, simulatedStep) {
+  if (result) return "completed";
+
+  const latest = [...statuses]
+    .reverse()
+    .find((event) => normalizeAgentKey(event.agent) === agentKey);
+
+  if (latest?.status === "done") return "completed";
+  if (latest?.status === "running") return "running";
+
+  if (isGenerating && statuses.length === 0) {
+    const index = AGENTS.findIndex((agent) => agent.key === agentKey);
+    if (index < simulatedStep) return "completed";
+    if (index === simulatedStep) return "running";
+  }
+
+  return "waiting";
+}
+
+function detectConflicts(events) {
+  return [...events]
+    .sort((left, right) => new Date(left.start) - new Date(right.start))
+    .slice(0, -1)
+    .flatMap((event, index, sorted) => {
+      const next = sorted[index + 1];
+      if (!next || new Date(event.end) <= new Date(next.start)) return [];
+      return [{
+        event_ids: [event.id, next.id],
+        description: `${event.title} overlaps with ${next.title}.`
+      }];
+    });
+}
+
+function SidebarGroup({ title, items, activeLabel, onSelect }) {
+  return (
+    <div className="orbit-os-nav-group">
+      <div className="orbit-os-section-label">{title}</div>
+      <div className="orbit-os-nav-list">
+        {items.map(({ label, icon: Icon }) => (
+          <button
+            type="button"
+            className={`orbit-os-nav-item ${label === activeLabel ? "is-active" : ""}`}
+            onClick={() => onSelect(label)}
+            key={label}
+          >
+            <Icon size={20} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FeedbackControls({ target, onFeedback, feedbackState }) {
+  if (!target) return null;
+
+  const key = `${target.item_type}:${target.item_id}`;
+  const state = feedbackState[key];
+  const isSaving = state === "saving-up" || state === "saving-down";
+  const savedAction = state?.replace("saved-", "");
+
+  return (
+    <div className="orbit-feedback-actions" aria-label="Feedback controls">
+      {["up", "down"].map((action) => {
+        const Icon = action === "up" ? ThumbsUp : ThumbsDown;
+        const isSaved = savedAction === action;
+        return (
+          <button
+            type="button"
+            className={isSaved ? "is-saved" : ""}
+            onClick={() => onFeedback(target, action)}
+            disabled={isSaving}
+            aria-label={action === "up" ? "Mark useful" : "Mark not useful"}
+            key={action}
+          >
+            <Icon size={14} />
+          </button>
+        );
+      })}
+      {savedAction && <span>Saved</span>}
+    </div>
+  );
+}
+
+function BriefingItem({
+  children,
+  meta,
+  icon: Icon = Sparkles,
+  feedbackTarget,
+  feedbackState,
+  onFeedback
+}) {
+  return (
+    <motion.div className="orbit-brief-item" {...cardMotion}>
+      <div className="orbit-brief-item-icon">
+        <Icon size={16} />
+      </div>
+      <div>
+        <p>{children}</p>
+        {meta && <span>{meta}</span>}
+      </div>
+      <FeedbackControls
+        target={feedbackTarget}
+        feedbackState={feedbackState}
+        onFeedback={onFeedback}
+      />
+    </motion.div>
+  );
+}
+
+function BriefSection({ title, children }) {
+  return (
+    <motion.section className="orbit-brief-section" {...cardMotion}>
+      <h3>{title}</h3>
+      <div className="orbit-brief-section-body">{children}</div>
+    </motion.section>
+  );
+}
+
+function StatCard({ label, value, detail }) {
+  return (
+    <div className="orbit-mvp-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail && <p>{detail}</p>}
+    </div>
+  );
+}
+
+function Modal({ title, children, onClose }) {
+  return (
+    <div className="orbit-modal-backdrop" role="presentation" onClick={onClose}>
+      <motion.div
+        className="orbit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        initial={{ opacity: 0, y: 18, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 10, scale: 0.98 }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="orbit-modal-header">
+          <div>
+            <span className="orbit-os-section-heading">{title}</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close modal">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="orbit-modal-body">{children}</div>
+      </motion.div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
   const [request, setRequest] = useState("");
+  const [activeView, setActiveView] = useState("Dashboard");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false); // To toggle empty state
+  const [hasStarted, setHasStarted] = useState(false);
   const [statuses, setStatuses] = useState([]);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [now, setNow] = useState(new Date());
+  const [simulatedStep, setSimulatedStep] = useState(0);
+  const [runStartedAt, setRunStartedAt] = useState(null);
+  const [mockData, setMockData] = useState({ emails: [], calendar: [], tasks: [] });
+  const [feedbackRecords, setFeedbackRecords] = useState([]);
+  const [dataError, setDataError] = useState("");
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [feedbackState, setFeedbackState] = useState({});
+  const [telemetry, setTelemetry] = useState(null);
+  const [isTelemetryOpen, setIsTelemetryOpen] = useState(false);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
 
-  const topScoreById = useMemo(() => {
-    const ranking = result?.briefing?.full_sections?.ranking ?? [];
-    return Object.fromEntries(ranking.map((item) => [item.item_id, item.priority_score]));
-  }, [result]);
+  useEffect(() => {
+    const timerId = window.setInterval(() => setNow(new Date()), 30000);
+    return () => window.clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadDashboardData() {
+      setIsDataLoading(true);
+      setDataError("");
+      try {
+        const [emails, calendar, tasks, feedback] = await Promise.all([
+          fetchJson("/api/data/mock/emails"),
+          fetchJson("/api/data/mock/calendar"),
+          fetchJson("/api/data/mock/tasks"),
+          fetchJson("/api/feedback")
+        ]);
+
+        if (!ignore) {
+          setMockData({ emails, calendar, tasks });
+          setFeedbackRecords(feedback);
+        }
+      } catch (caught) {
+        if (!ignore) {
+          setDataError(caught.message ?? "Unable to load dashboard data.");
+        }
+      } finally {
+        if (!ignore) setIsDataLoading(false);
+      }
+    }
+
+    loadDashboardData();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isGenerating || statuses.length > 0) {
+      setSimulatedStep(0);
+      return undefined;
+    }
+
+    const timerId = window.setInterval(() => {
+      setSimulatedStep((step) => Math.min(step + 1, AGENTS.length - 1));
+    }, 750);
+
+    return () => window.clearInterval(timerId);
+  }, [isGenerating, statuses.length]);
+
+  const briefing = result?.briefing;
+  const calendarOutput = useMemo(() => getSectionOutput(statuses, "calendar"), [statuses]);
+  const priorityOutput = useMemo(() => getSectionOutput(statuses, "priority"), [statuses]);
+  const latestConflicts = calendarOutput?.conflicts?.length
+    ? calendarOutput.conflicts
+    : detectConflicts(mockData.calendar);
+
+  const analytics = useMemo(() => {
+    const importantEmails = mockData.emails.filter((email) => email.labels?.includes("important")).length;
+    const unreadEmails = mockData.emails.filter((email) => !email.read).length;
+    const pendingTasks = mockData.tasks.filter((task) => task.status?.toLowerCase() === "pending").length;
+    const upcomingMeetings = mockData.calendar.length;
+
+    return {
+      importantEmails,
+      unreadEmails,
+      pendingTasks,
+      upcomingMeetings,
+      conflicts: latestConflicts.length,
+      feedback: feedbackRecords.length
+    };
+  }, [feedbackRecords.length, latestConflicts.length, mockData]);
+
+  const timelineEvents = useMemo(() => {
+    const actualEvents = statuses.map((event, index) => ({
+      ...event,
+      id: `${event.agent}-${event.status}-${index}`,
+      displayTime: formatClock(new Date(event.observedAt ?? Date.now())),
+      label: AGENTS.find((agent) => agent.key === normalizeAgentKey(event.agent))?.label ?? event.agent
+    }));
+
+    if (actualEvents.length) return actualEvents.slice(-6);
+
+    const base = runStartedAt ?? Date.now();
+    return AGENTS.slice(0, 5).map((agent, index) => ({
+      id: `placeholder-${agent.key}`,
+      agent: agent.key,
+      status: isGenerating && index === simulatedStep ? "running" : "waiting",
+      displayTime: index < 3 ? formatClock(new Date(base + index * 60000)) : "--:--",
+      label: agent.label,
+      message: index < 3 ? "Waiting for live status" : "Waiting to start"
+    }));
+  }, [isGenerating, runStartedAt, simulatedStep, statuses]);
+
+  async function fetchJson(path, options) {
+    const response = await fetch(`${API_BASE}${path}`, options);
+    if (!response.ok) {
+      throw new Error(`${path} failed with ${response.status}`);
+    }
+    return response.json();
+  }
+
+  function selectView(label) {
+    setActiveView(label);
+    window.history.replaceState(null, "", "/dashboard");
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+  }
 
   async function generateBriefing(prompt = request) {
+    setActiveView("Dashboard");
     setIsGenerating(true);
     setHasStarted(true);
     setStatuses([]);
     setResult(null);
     setError("");
+    setRunStartedAt(Date.now());
 
     try {
       const response = await fetch(`${API_BASE}/api/briefing/generate`, {
@@ -130,7 +457,7 @@ export default function Dashboard() {
     const payload = JSON.parse(dataLine.replace("data:", "").trim());
 
     if (event === "status") {
-      setStatuses((current) => [...current, payload]);
+      setStatuses((current) => [...current, { ...payload, observedAt: Date.now() }]);
     }
     if (event === "final") {
       setResult(payload);
@@ -140,263 +467,515 @@ export default function Dashboard() {
     }
   }
 
-  // Calculate agent statuses for pipeline
-  const agentStatusMap = {};
-  statuses.forEach((s) => {
-    agentStatusMap[s.agent] = s.status; // 'running' or 'done'
-  });
+  async function submitFeedback(target, action) {
+    const itemKey = `${target.item_type}:${target.item_id}`;
+    setFeedbackState((current) => ({ ...current, [itemKey]: `saving-${action}` }));
 
-  const briefing = result?.briefing;
+    try {
+      const record = await fetchJson("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...target,
+          action
+        })
+      });
+      setFeedbackRecords((current) => [...current, record]);
+      setFeedbackState((current) => ({ ...current, [itemKey]: `saved-${action}` }));
+    } catch (caught) {
+      setFeedbackState((current) => ({ ...current, [itemKey]: "error" }));
+      setError(caught.message ?? "Unable to save feedback.");
+    }
+  }
 
-  return (
-    <div className="app-layout">
-      <Sidebar />
+  async function openTelemetry() {
+    setIsTelemetryOpen(true);
+    setTelemetry({ status: "checking" });
+    try {
+      const health = await fetchJson("/api/health");
+      setTelemetry({
+        status: health.status,
+        checkedAt: new Date().toISOString()
+      });
+    } catch (caught) {
+      setTelemetry({
+        status: "offline",
+        message: caught.message ?? "Unable to reach backend.",
+        checkedAt: new Date().toISOString()
+      });
+    }
+  }
 
-      <main className="main-area">
-        {/* HEADER */}
-        <header className="dash-header">
-          <div>
-            <h1 className="dash-header-title">AI Daily Briefing Assistant</h1>
-            <p className="dash-header-sub">Your AI co-pilot for a focused and productive day.</p>
+  function renderDashboardView() {
+    return (
+      <>
+        <motion.section className="orbit-os-command" {...cardMotion}>
+          <div className="orbit-os-title-row">
+            <span />
+            <h1>Orbit Command Center</h1>
+            <span />
           </div>
-          <div className="flex items-center gap-4">
-            <div className="status-pill">
-              <div className="status-dot" />
-              System Status: All Systems Online
-            </div>
-            <button className="w-9 h-9 rounded-full border border-white/10 flex items-center justify-center text-white/50 hover:text-white hover:bg-white/5 transition-colors">
-              <Sun size={16} />
-            </button>
-          </div>
-        </header>
 
-        {/* GENERATE BAR */}
-        <div className="generate-bar">
-          <div className="font-grotesk text-[13px] uppercase text-[#EFF4FF] tracking-wide mb-3">
-            What would you like to know today?
-          </div>
-          <div className="generate-row">
+          <div className="orbit-command-input-wrap">
+            <Sparkles size={28} />
             <input
-              className="generate-input"
               value={request}
-              onChange={(e) => setRequest(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !isGenerating && generateBriefing()}
-              placeholder="E.g., Give me my daily briefing, check conflicts, show urgent emails..."
+              onChange={(event) => setRequest(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !isGenerating) generateBriefing();
+              }}
+              placeholder="Ask Orbit anything..."
             />
             <button
-              className="generate-btn"
+              type="button"
               onClick={() => generateBriefing()}
               disabled={isGenerating}
+              aria-label="Send command"
             >
-              {isGenerating ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-              Generate Briefing
+              {isGenerating ? <Loader2 size={24} className="spin" /> : <Send size={24} />}
             </button>
           </div>
-          <div className="chip-row">
-            <button className="chip" onClick={() => generateBriefing("Full Briefing")}>
-              <FileText className="text-[#4ADE80]" /> Full Briefing
-            </button>
-            <button className="chip" onClick={() => generateBriefing("Conflicts")}>
-              <AlertTriangle className="text-[#f59e0b]" /> Conflicts
-            </button>
-            <button className="chip" onClick={() => generateBriefing("Manager Email")}>
-              <Mail className="text-[#a855f7]" /> Manager Email
-            </button>
-            <button className="chip" onClick={() => generateBriefing("Due Tasks")}>
-              <CheckSquare className="text-[#3b82f6]" /> Due Tasks
-            </button>
-            <button className="chip" onClick={() => generateBriefing("Free Time")}>
-              <Clock3 className="text-[#4ADE80]" /> Free Time
-            </button>
-          </div>
-        </div>
 
-        {/* CONTENT AREA */}
-        <div className="content-area">
-          {!hasStarted ? (
-            /* EMPTY STATE */
-            <div className="dash-empty fade-in-up">
-              <div className="dash-empty-orbit">
-                <div className="orbit-ring" />
-                <div className="orbit-ring" />
-                <div className="orbit-core">
-                  <Zap size={24} />
-                </div>
-              </div>
-              <h2>Ready for your briefing</h2>
-              <p>
-                Enter a request above or select a quick prompt to begin. The orchestrator will engage the necessary agents to analyze your data.
-              </p>
-            </div>
+          <div className="orbit-command-chips">
+            {QUICK_COMMANDS.map(({ label, prompt, icon: Icon }) => (
+              <button
+                type="button"
+                key={label}
+                onClick={() => generateBriefing(prompt)}
+                disabled={isGenerating}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </motion.section>
+
+        {renderBriefingPanel()}
+      </>
+    );
+  }
+
+  function renderBriefingPanel() {
+    return (
+      <motion.section className="orbit-ai-brief" {...cardMotion}>
+        <div className="orbit-os-section-heading">AI Brief</div>
+        {error && <div className="orbit-os-error">{error}</div>}
+
+        <AnimatePresence mode="wait">
+          {!briefing ? (
+            <motion.div
+              className="orbit-brief-empty"
+              key="empty"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+            >
+              <div className="orbit-brief-empty-orbits" aria-hidden="true" />
+              <h2>{hasStarted ? "Orbit is building your briefing" : "Your personalized briefing will appear here"}</h2>
+              <p>Orbit is analyzing your data from all connected sources...</p>
+            </motion.div>
           ) : (
-            <div className="fade-in-up">
-              {error && (
-                <div className="mb-4 p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-400 font-mono text-[12px]">
-                  {error}
-                </div>
-              )}
-
-              {/* STATS */}
-              <div className="font-grotesk text-[14px] uppercase text-[#EFF4FF] tracking-wide mb-3 mt-2">
-                Today at a glance
-              </div>
-              <div className="stat-grid">
-                <div className="stat-card">
-                  <div className="stat-icon bg-[#4ADE80]/10 text-[#4ADE80]"><Mail size={20} /></div>
-                  <div>
-                    <div className="stat-num">{briefing?.full_sections?.emails?.length || 0}</div>
-                    <div className="stat-label">Important Emails</div>
-                    <div className="stat-sub text-[#4ADE80]">Active items</div>
-                  </div>
-                </div>
-                <div className="stat-card">
-                  <div className="stat-icon bg-[#a855f7]/10 text-[#a855f7]"><CalendarDays size={20} /></div>
-                  <div>
-                    <div className="stat-num">{briefing?.full_sections?.meetings?.length || 0}</div>
-                    <div className="stat-label">Meetings</div>
-                    <div className="stat-sub text-[#f87171]">Check schedule</div>
-                  </div>
-                </div>
-                <div className="stat-card">
-                  <div className="stat-icon bg-[#3b82f6]/10 text-[#3b82f6]"><CheckSquare size={20} /></div>
-                  <div>
-                    <div className="stat-num">{briefing?.full_sections?.tasks?.length || 0}</div>
-                    <div className="stat-label">Pending Tasks</div>
-                    <div className="stat-sub text-[#3b82f6]">Requires action</div>
-                  </div>
-                </div>
-                <div className="stat-card">
-                  <div className="stat-icon bg-[#f59e0b]/10 text-[#f59e0b]"><Clock3 size={20} /></div>
-                  <div>
-                    <div className="stat-num">
-                      {briefing?.suggested_schedule?.length || 0}
-                    </div>
-                    <div className="stat-label">Schedule Blocks</div>
-                    <div className="stat-sub text-[#EFF4FF]/50">Suggested blocks</div>
-                  </div>
-                </div>
+            <motion.div
+              className="orbit-brief-results"
+              key="results"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+            >
+              <div className="orbit-brief-summary">
+                <Sparkles size={18} />
+                <p>{briefing.summary}</p>
               </div>
 
-              {/* TWO COLUMNS: Priorities & Schedule */}
-              <div className="two-col">
-                {/* Top Priorities */}
-                <div className="panel-card flex flex-col">
-                  <div className="panel-card-header">
-                    <span className="panel-card-title">Top Priorities</span>
-                    <span className="panel-card-action">View all</span>
-                  </div>
-                  <div className="flex-1 overflow-y-auto">
-                    {!briefing ? (
-                      <div className="p-8 text-center opacity-50"><Loader2 className="spin inline text-[#6FFF00]" size={20} /></div>
-                    ) : (
-                      briefing.top_priorities.map((item, idx) => {
-                        const score = topScoreById[item.item_id];
-                        const band = scoreBand(score);
-                        const type = item.type ?? inferItemType(item);
-                        return (
-                          <div key={idx} className="priority-row">
-                            <div className="priority-num">{idx + 1}</div>
-                            <div className={`priority-icon bg-${band === 'urgent' || band === 'high' ? 'red' : 'green'}-500/10 text-${band === 'urgent' || band === 'high' ? 'red' : 'green'}-400`}>
-                              <TypeIcon type={type} />
-                            </div>
-                            <div className="priority-info">
-                              <div className="priority-title">{item.headline}</div>
-                              <div className="priority-detail">{item.source || item.sender || "System"}</div>
-                            </div>
-                            <div className={`urgency-badge badge-${band}`}>
-                              {band.charAt(0).toUpperCase() + band.slice(1)}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
+              <BriefSection title="Top Priorities">
+                {(briefing.top_priorities ?? []).map((item) => (
+                  <BriefingItem
+                    key={item.item_id}
+                    icon={Star}
+                    meta={item.type}
+                    feedbackTarget={{
+                      item_id: item.item_id,
+                      item_type: item.type,
+                      item_features: { source: "top_priority" }
+                    }}
+                    feedbackState={feedbackState}
+                    onFeedback={submitFeedback}
+                  >
+                    {item.headline}
+                  </BriefingItem>
+                ))}
+              </BriefSection>
 
-                {/* Today's Schedule */}
-                <div className="panel-card flex flex-col">
-                  <div className="panel-card-header">
-                    <span className="panel-card-title">Today's Schedule</span>
-                    <span className="panel-card-action flex items-center border border-white/10 px-3 py-1 rounded-full text-[#EFF4FF]">
-                      View calendar
-                    </span>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4 pt-2">
-                    {!briefing ? (
-                       <div className="p-8 text-center opacity-50"><Loader2 className="spin inline text-[#6FFF00]" size={20} /></div>
-                    ) : (
-                      briefing.suggested_schedule.map((block, idx) => (
-                        <div key={idx} className="schedule-row-item">
-                          <div className="sched-time">{block.time_block.split(" - ")[0]}</div>
-                          <div className="flex flex-col items-center h-full pt-1">
-                            <div className="sched-dot bg-[#6FFF00]"></div>
-                            {idx < briefing.suggested_schedule.length - 1 && (
-                              <div className="w-[1px] h-full bg-gradient-to-b from-[#6FFF00]/50 to-transparent my-1"></div>
-                            )}
-                          </div>
-                          <div className="sched-info">
-                            <div className="sched-title text-[#EFF4FF]">{block.activity}</div>
-                            <div className="sched-detail">{block.time_block}</div>
-                          </div>
-                          {block.activity.toLowerCase().includes("conflict") && (
-                            <div className="conflict-badge">
-                              <AlertTriangle size={10} /> Conflict
-                            </div>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
+              <BriefSection title="Important Emails">
+                {(briefing.full_sections?.emails ?? []).length ? (
+                  briefing.full_sections.emails.map((email) => (
+                    <BriefingItem
+                      key={email.id}
+                      icon={Mail}
+                      meta={`${email.sender} ${email.requires_reply ? "Reply needed" : ""}`}
+                      feedbackTarget={{
+                        item_id: email.id,
+                        item_type: "email",
+                        item_features: {
+                          sender_domain: email.sender?.split("@").at(-1),
+                          has_deadline: Boolean(email.deadline)
+                        }
+                      }}
+                      feedbackState={feedbackState}
+                      onFeedback={submitFeedback}
+                    >
+                      {email.subject}
+                    </BriefingItem>
+                  ))
+                ) : (
+                  <p className="orbit-brief-muted">No important emails detected.</p>
+                )}
+              </BriefSection>
 
-              {/* AGENT PIPELINE */}
-              <div className="pipeline-section">
-                <div className="pipeline-header">
-                  <span className="pipeline-title">AI Agent Workflow (Live)</span>
-                  <span className="pipeline-action border border-white/10 px-3 py-1 rounded-full text-[#EFF4FF] hover:bg-white/5 flex items-center gap-2">
-                    <ArrowRight size={10}/> View latest run
-                  </span>
-                </div>
-                <div className="pipeline-flow">
-                  {AGENT_ORDER.map((agentKey, idx) => {
-                    const status = agentStatusMap[agentKey] || (result ? "done" : "pending");
-                    let Icon = User;
-                    if (agentKey === "planner") Icon = Zap;
-                    if (agentKey === "email") Icon = Mail;
-                    if (agentKey === "calendar") Icon = CalendarDays;
-                    if (agentKey === "task") Icon = CheckSquare;
-                    if (agentKey === "priority") Icon = AlertTriangle;
-                    if (agentKey === "final_briefing") Icon = FileText;
+              <BriefSection title="Schedule Conflicts">
+                {latestConflicts.length ? (
+                  latestConflicts.map((conflict, index) => (
+                    <BriefingItem key={`${conflict.description}-${index}`} icon={AlertTriangle}>
+                      {conflict.description}
+                    </BriefingItem>
+                  ))
+                ) : (
+                  <p className="orbit-brief-muted">No schedule conflicts detected.</p>
+                )}
+              </BriefSection>
 
-                    return (
-                      <div key={agentKey} className="flex items-center">
-                        <div className="pipeline-node">
-                          <div className={`pipeline-icon ${status === 'running' ? 'border-[#f59e0b] shadow-[0_0_10px_rgba(245,158,11,0.2)]' : status === 'done' ? 'border-[#6FFF00] bg-[#6FFF00]/5' : ''}`}>
-                             <Icon size={20} className={status === 'running' ? 'text-[#f59e0b]' : status === 'done' ? 'text-[#6FFF00]' : 'text-white/30'} />
-                          </div>
-                          <div className="flex flex-col items-center">
-                            <span className="pipeline-label">{AGENT_LABELS[agentKey]}</span>
-                            <span className={`pipeline-status ${status}`}>
-                              {status === 'running' ? 'Running...' : status === 'done' ? 'Completed' : 'Pending'}
-                            </span>
-                          </div>
-                        </div>
-                        {idx < AGENT_ORDER.length - 1 && (
-                          <div className="pipeline-arrow">
-                            <ArrowRight size={12} />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              <BriefSection title="Due Tasks">
+                {(briefing.full_sections?.tasks ?? []).length ? (
+                  briefing.full_sections.tasks.map((task) => (
+                    <BriefingItem
+                      key={task.id}
+                      icon={CheckSquare}
+                      meta={task.due_date ? `Due ${formatValueTime(task.due_date)}` : task.source}
+                      feedbackTarget={{
+                        item_id: task.id,
+                        item_type: "task",
+                        item_features: { has_deadline: Boolean(task.due_date) }
+                      }}
+                      feedbackState={feedbackState}
+                      onFeedback={submitFeedback}
+                    >
+                      {task.title}
+                    </BriefingItem>
+                  ))
+                ) : (
+                  <p className="orbit-brief-muted">No due tasks found.</p>
+                )}
+              </BriefSection>
 
-            </div>
+              <BriefSection title="Suggested Schedule">
+                {(briefing.suggested_schedule ?? []).length ? (
+                  briefing.suggested_schedule.map((block, index) => (
+                    <BriefingItem key={`${block.time_block}-${index}`} icon={Clock3} meta={block.time_block}>
+                      {block.activity}
+                    </BriefingItem>
+                  ))
+                ) : (
+                  <p className="orbit-brief-muted">No schedule blocks suggested yet.</p>
+                )}
+              </BriefSection>
+            </motion.div>
           )}
+        </AnimatePresence>
+      </motion.section>
+    );
+  }
+
+  function renderDataView() {
+    if (activeView === "Emails") {
+      return (
+        <DataView title="Emails" subtitle="Mock inbox data currently feeding the Email Agent.">
+          {mockData.emails.map((email) => (
+            <div className="orbit-data-row" key={email.id}>
+              <Mail size={18} />
+              <div>
+                <strong>{email.subject}</strong>
+                <p>{email.sender} - {formatDateTime(email.received_at)}</p>
+                <span>{email.read ? "Read" : "Unread"} {email.labels?.join(" / ")}</span>
+              </div>
+            </div>
+          ))}
+        </DataView>
+      );
+    }
+
+    if (activeView === "Calendar") {
+      return (
+        <DataView title="Calendar" subtitle="Mock meetings currently feeding the Calendar Agent.">
+          {mockData.calendar.map((event) => (
+            <div className="orbit-data-row" key={event.id}>
+              <CalendarDays size={18} />
+              <div>
+                <strong>{event.title}</strong>
+                <p>{formatDateTime(event.start)} - {formatValueTime(event.end)}</p>
+                <span>{event.attendees?.length ?? 0} attendee(s)</span>
+              </div>
+            </div>
+          ))}
+        </DataView>
+      );
+    }
+
+    return (
+      <DataView title="Tasks" subtitle="Mock task data currently feeding the Task Agent.">
+        {mockData.tasks.map((task) => (
+          <div className="orbit-data-row" key={task.id}>
+            <CheckSquare size={18} />
+            <div>
+              <strong>{task.title}</strong>
+              <p>{task.due_date ? `Due ${formatDateTime(task.due_date)}` : "No due date"}</p>
+              <span>{task.status} - {task.estimated_effort_minutes ?? 45} min</span>
+            </div>
+          </div>
+        ))}
+      </DataView>
+    );
+  }
+
+  function renderInsightView() {
+    if (activeView === "Priorities") {
+      const ranking = priorityOutput?.ranked_items ?? briefing?.full_sections?.ranking ?? [];
+      return (
+        <DataView title="Priorities" subtitle="Latest ranked items from the Priority Agent.">
+          {ranking.length ? ranking.map((item) => (
+            <div className="orbit-data-row" key={`${item.type}-${item.item_id}`}>
+              <Star size={18} />
+              <div>
+                <strong>{item.item_id}</strong>
+                <p>{item.justification ?? item.headline ?? "Ranked by urgency signals"}</p>
+                <span>{item.type} {item.priority_score ? `- score ${item.priority_score}/10` : ""}</span>
+              </div>
+            </div>
+          )) : <EmptyView message="Run a briefing to generate ranked priorities." />}
+        </DataView>
+      );
+    }
+
+    if (activeView === "Conflicts") {
+      return (
+        <DataView title="Conflicts" subtitle="Calendar overlaps detected from the latest run or mock calendar.">
+          {latestConflicts.length ? latestConflicts.map((conflict, index) => (
+            <div className="orbit-data-row" key={`${conflict.description}-${index}`}>
+              <AlertTriangle size={18} />
+              <div>
+                <strong>Schedule conflict</strong>
+                <p>{conflict.description}</p>
+                <span>{conflict.event_ids?.join(" + ")}</span>
+              </div>
+            </div>
+          )) : <EmptyView message="No conflicts detected right now." />}
+        </DataView>
+      );
+    }
+
+    if (activeView === "Analytics") {
+      return (
+        <DataView title="Analytics" subtitle="A lightweight snapshot of the current mock workspace.">
+          <div className="orbit-mvp-stats-grid">
+            <StatCard label="Unread emails" value={analytics.unreadEmails} />
+            <StatCard label="Important emails" value={analytics.importantEmails} />
+            <StatCard label="Meetings" value={analytics.upcomingMeetings} />
+            <StatCard label="Pending tasks" value={analytics.pendingTasks} />
+            <StatCard label="Conflicts" value={analytics.conflicts} />
+            <StatCard label="Feedback records" value={analytics.feedback} />
+          </div>
+        </DataView>
+      );
+    }
+
+    return (
+      <DataView title="Feedback" subtitle="Recent up/down signals saved through the current feedback endpoint.">
+        {feedbackRecords.length ? [...feedbackRecords].reverse().slice(0, 12).map((record, index) => (
+          <div className="orbit-data-row" key={`${record.item_id}-${record.timestamp}-${index}`}>
+            {record.action === "up" ? <ThumbsUp size={18} /> : <ThumbsDown size={18} />}
+            <div>
+              <strong>{record.item_id}</strong>
+              <p>{record.item_type} marked {record.action === "up" ? "useful" : "not useful"}</p>
+              <span>{formatDateTime(record.timestamp)}</span>
+            </div>
+          </div>
+        )) : <EmptyView message="No feedback recorded yet. Run a briefing and rate an item." />}
+      </DataView>
+    );
+  }
+
+  function DataView({ title, subtitle, children }) {
+    return (
+      <motion.section className="orbit-mvp-view" {...cardMotion}>
+        <div className="orbit-mvp-view-header">
+          <span className="orbit-os-section-heading">{title}</span>
+          <p>{subtitle}</p>
         </div>
-      </main>
+        {dataError && <div className="orbit-os-error">{dataError}</div>}
+        {isDataLoading ? (
+          <div className="orbit-brief-empty">
+            <Loader2 size={22} className="spin" />
+            <p>Loading local demo data...</p>
+          </div>
+        ) : (
+          <div className="orbit-data-list">{children}</div>
+        )}
+      </motion.section>
+    );
+  }
+
+  function EmptyView({ message }) {
+    return (
+      <div className="orbit-empty-inline">
+        <Sparkles size={18} />
+        <span>{message}</span>
+      </div>
+    );
+  }
+
+  function renderMainView() {
+    if (activeView === "Dashboard") return renderDashboardView();
+    if (["Emails", "Calendar", "Tasks"].includes(activeView)) return renderDataView();
+    return renderInsightView();
+  }
+
+  return (
+    <div className="orbit-os-shell">
+      <div className="orbit-os-grid" aria-hidden="true" />
+      <div className="orbit-os-glow orbit-os-glow-left" aria-hidden="true" />
+      <div className="orbit-os-glow orbit-os-glow-right" aria-hidden="true" />
+
+      <header className="orbit-os-topbar">
+        <div className="orbit-os-logo">
+          <span>Orbit</span>
+          <i aria-hidden="true" />
+        </div>
+        <div className="orbit-os-time">{formatTopBarDate(now)}</div>
+        <div className="orbit-os-top-actions">
+          <div className="orbit-os-live-pill">
+            <span />
+            <strong>Live</strong>
+            <em>All Systems Online</em>
+          </div>
+          <button
+            className="orbit-os-icon-button"
+            type="button"
+            aria-label="System telemetry"
+            onClick={openTelemetry}
+          >
+            <Activity size={18} />
+          </button>
+        </div>
+      </header>
+
+      <div className="orbit-os-layout">
+        <aside className="orbit-os-sidebar">
+          <SidebarGroup
+            title="Dashboard"
+            items={DASHBOARD_NAV}
+            activeLabel={activeView}
+            onSelect={selectView}
+          />
+          <SidebarGroup
+            title="Data Sources"
+            items={DATA_SOURCES}
+            activeLabel={activeView}
+            onSelect={selectView}
+          />
+          <SidebarGroup
+            title="Insights"
+            items={INSIGHTS}
+            activeLabel={activeView}
+            onSelect={selectView}
+          />
+
+          <button className="orbit-os-login" type="button" onClick={() => setIsLoginOpen(true)}>
+            <User size={21} />
+            <span>Login / Sign up</span>
+          </button>
+        </aside>
+
+        <main className="orbit-os-main">
+          <AnimatePresence mode="wait">
+            <motion.div key={activeView} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              {renderMainView()}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+
+        <aside className="orbit-os-right">
+          <motion.section className="orbit-side-card" {...cardMotion}>
+            <div className="orbit-os-section-heading">Agent Status</div>
+            <div className="orbit-status-list">
+              {AGENTS.map(({ key, label, icon: Icon }) => {
+                const status = getAgentStatus(key, statuses, result, isGenerating, simulatedStep);
+                return (
+                  <div className={`orbit-status-row ${status}`} key={key}>
+                    <Icon size={20} />
+                    <span>{label}</span>
+                    <CheckCircle2 className="orbit-status-check" size={17} />
+                    <i />
+                  </div>
+                );
+              })}
+            </div>
+          </motion.section>
+
+          <motion.section className="orbit-side-card orbit-timeline-card" {...cardMotion}>
+            <div className="orbit-os-section-heading">Execution Timeline</div>
+            <div className="orbit-timeline">
+              {timelineEvents.map((event) => {
+                const status = event.status === "done" ? "completed" : event.status;
+                return (
+                  <div className={`orbit-timeline-item ${status}`} key={event.id}>
+                    <div className="orbit-timeline-pin" />
+                    <div>
+                      <time>{event.displayTime}</time>
+                      <strong>{event.label}</strong>
+                      <span>{eventLabel(event)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.section>
+        </aside>
+      </div>
+
+      <AnimatePresence>
+        {isTelemetryOpen && (
+          <Modal title="System Telemetry" onClose={() => setIsTelemetryOpen(false)}>
+            <div className="orbit-modal-grid">
+              <StatCard
+                label="Backend"
+                value={telemetry?.status === "checking" ? "Checking" : telemetry?.status ?? "Unknown"}
+                detail={telemetry?.message}
+              />
+              <StatCard label="Data mode" value="Mock Data" detail="Local JSON fixtures" />
+              <StatCard
+                label="Last run"
+                value={runStartedAt ? formatClock(new Date(runStartedAt)) : "Not run"}
+                detail={isGenerating ? "Briefing in progress" : result ? "Briefing completed" : "Idle"}
+              />
+            </div>
+          </Modal>
+        )}
+
+        {isLoginOpen && (
+          <Modal title="Demo Mode" onClose={() => setIsLoginOpen(false)}>
+            <div className="orbit-demo-modal-copy">
+              <Database size={22} />
+              <div>
+                <h2>Orbit is running in local demo mode.</h2>
+                <p>
+                  Authentication is intentionally paused for this MVP phase. The app is using mock
+                  emails, calendar events, tasks, and feedback until real integrations are added.
+                </p>
+              </div>
+            </div>
+          </Modal>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
